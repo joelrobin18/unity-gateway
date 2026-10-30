@@ -1979,8 +1979,8 @@ def _configure_agents_for_mcp(
     installed = available_mcp_clients()
     # VS Code reads Copilot's user config, so `vscode` alone needs a VS Code setup for the
     # workspace rather than the Copilot CLI; that's checked once the workspace is selected.
-    vscode_only = "vscode" in names and "copilot" not in names
-    not_installed = sorted(scope - set(installed) - ({"copilot"} if vscode_only else set()))
+    vscode_only = "vscode" in names and AGENT_COPILOT not in names
+    not_installed = sorted(scope - set(installed) - ({AGENT_COPILOT} if vscode_only else set()))
     if not_installed:
         raise RuntimeError(_not_installed_message(not_installed))
     previous_workspace = current_workspace_key(load_full_state())
@@ -1997,7 +1997,7 @@ def _configure_agents_for_mcp(
             else:
                 profile = None
         state = load_state()
-        if vscode_only and "copilot" not in installed and not state.get(VSCODE_CONFIGURED_KEY):
+        if vscode_only and AGENT_COPILOT not in installed and not state.get(VSCODE_CONFIGURED_KEY):
             raise RuntimeError(
                 "VS Code isn't set up for this workspace yet. Run `ug configure --agents vscode` first."
             )
@@ -2168,7 +2168,7 @@ def mcp_add(
                 (bucket or {}).get("mcp_clients") or []
             )
             if (bucket or {}).get(VSCODE_CONFIGURED_KEY):
-                recorded.add("copilot")
+                recorded.add(AGENT_COPILOT)
             existing_scope = (
                 set(configured_mcp_clients(bucket or {}, available_mcp_clients())) & recorded
             )
