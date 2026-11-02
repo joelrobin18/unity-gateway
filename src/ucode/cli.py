@@ -57,8 +57,6 @@ from ucode.constants import (
     AGENT_CLAUDE,
     AGENT_CODEX,
     AGENT_COPILOT,
-    AGENT_CURSOR,
-    AGENT_VSCODE,
     ISAAC_SMART_ROUTER_FEEDBACK_ENV_VAR,
     SMART_ROUTING_ENV_KEYS,
     UG_HEADERS_ENV_VAR,
@@ -141,7 +139,6 @@ from ucode.managed_resolve import (
 )
 from ucode.mcp import (
     MCP_CLIENTS,
-    VSCODE_CONFIGURED_KEY,
     McpServiceListingRateLimited,
     add_mcp_command,
     add_skills_command,
@@ -152,8 +149,6 @@ from ucode.mcp import (
     configured_mcp_clients,
     configured_mcp_servers_by_name,
     list_mcp_command,
-    mcp_client_display,
-    mcp_clients_for_agents,
     purge_cross_workspace_mcp_residue,
     reconcile_managed_mcp_servers,
     remove_mcp_command,
@@ -1695,9 +1690,9 @@ def revert() -> int:
     print_kv("Unity Gateway workspace policy", workspace_policy_result)
     print_kv("Pi settings", "restored" if pi_settings_restored else "unchanged")
     print_kv("VS Code extension", vscode_result)
-    for client in MCP_CLIENTS:
+    for client, spec in MCP_CLIENTS.items():
         print_kv(
-            f"{mcp_client_display(client, state)} MCP config",
+            f"{spec['display']} MCP config",
             "restored" if mcp_results.get(client) else "unchanged",
         )
     if desktop_result == "failed":
@@ -1977,13 +1972,9 @@ def _configure_agents_for_mcp(
     workspace_entries: list[tuple[str, str | None]] | None = None,
 ) -> set[str]:
     """Select MCP clients for one workspace without changing agent model settings."""
-    names = {a if a in (AGENT_CURSOR, AGENT_VSCODE) else normalize_tool(a) for a in requested}
-    scope = mcp_clients_for_agents(names)
+    scope = {a if a == "cursor" else normalize_tool(a) for a in requested}
     installed = available_mcp_clients()
-    # VS Code reads Copilot's user config, so `vscode` alone needs a VS Code setup for the
-    # workspace rather than the Copilot CLI; that's checked once the workspace is selected.
-    vscode_only = AGENT_VSCODE in names and AGENT_COPILOT not in names
-    not_installed = sorted(scope - set(installed) - ({AGENT_COPILOT} if vscode_only else set()))
+    not_installed = sorted(scope - set(installed))
     if not_installed:
         raise RuntimeError(_not_installed_message(not_installed))
     previous_workspace = current_workspace_key(load_full_state())
@@ -2000,10 +1991,6 @@ def _configure_agents_for_mcp(
             else:
                 profile = None
         state = load_state()
-        if vscode_only and AGENT_COPILOT not in installed and not state.get(VSCODE_CONFIGURED_KEY):
-            raise RuntimeError(
-                "VS Code isn't set up for this workspace yet. Run `ug configure --agents vscode` first."
-            )
         host, workspace_id = split_workspace_key(workspace)
         state["workspace"] = host
         if workspace_id:
@@ -2170,8 +2157,6 @@ def mcp_add(
             recorded = set((bucket or {}).get("available_tools") or []) | set(
                 (bucket or {}).get("mcp_clients") or []
             )
-            if (bucket or {}).get(VSCODE_CONFIGURED_KEY):
-                recorded.add(AGENT_COPILOT)
             existing_scope = (
                 set(configured_mcp_clients(bucket or {}, available_mcp_clients())) & recorded
             )
@@ -2221,10 +2206,7 @@ def mcp_remove(
     requested_agents = (
         None
         if agents is None
-        else (
-            mcp_clients_for_agents({a.strip().lower() for a in agents.split(",") if a.strip()})
-            or None
-        )
+        else ({a.strip().lower() for a in agents.split(",") if a.strip()} or None)
     )
     try:
         remove_mcp_command(agents=requested_agents)
@@ -2257,10 +2239,7 @@ def mcp_list(
     requested_agents = (
         None
         if agents is None
-        else (
-            mcp_clients_for_agents({a.strip().lower() for a in agents.split(",") if a.strip()})
-            or None
-        )
+        else ({a.strip().lower() for a in agents.split(",") if a.strip()} or None)
     )
     try:
         list_mcp_command(agents=requested_agents)
@@ -2521,12 +2500,7 @@ def skills_remove(
             requested_agents = (
                 None
                 if agents is None
-                else (
-                    mcp_clients_for_agents(
-                        {a.strip().lower() for a in agents.split(",") if a.strip()}
-                    )
-                    or None
-                )
+                else ({a.strip().lower() for a in agents.split(",") if a.strip()} or None)
             )
             locations = _parse_skill_locations(location)
             if locations:
@@ -4870,8 +4844,7 @@ def configure(
                 state = load_state()
                 managed, _ = _read_policy_for_other_agent(state)
                 refuse_user_scope_over_managed_config(state.get("workspace"), managed)
-                if vscode.configure(state, provider=provider, location=model_location):
-                    save_state({**state, VSCODE_CONFIGURED_KEY: True})
+                vscode.configure(state, provider=provider, location=model_location)
             if mcp_states is not None:
                 _restore_mcp_after_workspace_switch(previous_workspace, mcp_states[0])
         elif mcp is not None:

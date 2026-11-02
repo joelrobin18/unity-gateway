@@ -131,9 +131,6 @@ SKILL_LOCATIONS_BY_CLIENT_KEY = "skill_locations_by_client"
 # MCP-only clients ucode never launches for model routing, so they never land in
 # `available_tools`; they're eligible for MCP config purely on being installed.
 MCP_ONLY_CLIENTS = ("cursor",)
-# Copilot Chat in VS Code reads Copilot's user MCP config, so a workspace whose state carries this
-# key gets the `copilot` client even without the Copilot CLI, and `--agents vscode` names it.
-VSCODE_CONFIGURED_KEY = "vscode_configured"
 EXTERNAL_MCP_SELECTION_PREFIX = "external:"
 SQL_MCP_VALUE = "managed:sql"
 GENIE_SPACE_SELECTION_PREFIX = "genie-space:"
@@ -262,36 +259,11 @@ def available_mcp_clients() -> list[str]:
     return [client for client, spec in MCP_CLIENTS.items() if shutil.which(str(spec["binary"]))]
 
 
-def _with_vscode_copilot(state: dict, clients: list[str]) -> list[str]:
-    """``clients`` plus ``copilot`` when VS Code is set up for this workspace."""
-    if not state.get(VSCODE_CONFIGURED_KEY):
-        return clients
-    return [client for client in MCP_CLIENTS if client in clients or client == "copilot"]
-
-
-def mcp_clients_for_agents(agents: set[str]) -> set[str]:
-    """``--agents`` names as MCP clients."""
-    return {"copilot" if agent == "vscode" else agent for agent in agents}
-
-
-def mcp_client_display(client: str, state: dict) -> str:
-    if (
-        client == "copilot"
-        and state.get(VSCODE_CONFIGURED_KEY)
-        and not shutil.which(str(MCP_CLIENTS[client]["binary"]))
-    ):
-        return "GitHub Copilot in VS Code"
-    return str(MCP_CLIENTS[client]["display"])
-
-
 def configured_mcp_clients(state: dict, installed_clients: list[str]) -> list[str]:
     configured_tools = state.get("available_tools") or []
     if not isinstance(configured_tools, list):
         configured_tools = []
     configured = set(configured_tools) | set(state.get("mcp_clients") or [])
-    if state.get(VSCODE_CONFIGURED_KEY):
-        configured.add("copilot")
-    installed_clients = _with_vscode_copilot(state, installed_clients)
     return [
         client
         for client in MCP_CLIENTS
@@ -504,7 +476,7 @@ def revert_mcp_configs(state: dict) -> dict[str, bool]:
             try:
                 removed_scopes = remove_client_mcp_server(client, name)
             except RuntimeError as exc:
-                display = mcp_client_display(client, state)
+                display = MCP_CLIENTS[client]["display"]
                 print_warning(f"Could not remove MCP server `{name}` from {display}: {exc}")
                 continue
             results[client] = bool(removed_scopes) or results.get(client, False)
@@ -1664,7 +1636,7 @@ def restore_workspace_mcp_servers(state: dict, agents: set[str]) -> None:
     workspace = state.get("workspace")
     if not workspace:
         return
-    installed = set(_with_vscode_copilot(state, available_mcp_clients())) & agents
+    installed = set(available_mcp_clients()) & agents
     managed_names = managed_mcp_server_names(state, installed)
     servers = list(state.get("mcp_servers") or [])
     for client in sorted(installed):
@@ -1763,7 +1735,7 @@ def _batch_remove_stale_servers(batch_remove: dict[str, set[str]]) -> set[str]:
 def purge_cross_workspace_mcp_residue(
     state: dict, workspace: str, *, same_host_switch: bool = False
 ) -> None:
-    installed = set(_with_vscode_copilot(state, available_mcp_clients()))
+    installed = set(available_mcp_clients())
     # Collect every removal as {client: {names}} and apply it as one batched write per client below,
     # rather than a CLI/config removal per server (see `_batch_remove_stale_servers`).
     batch_remove: dict[str, set[str]] = {}
@@ -1976,7 +1948,7 @@ def setup_mcp_clients(
     if purge_foreign:
         purge_cross_workspace_mcp_residue(state, workspace)
 
-    installed_clients = _with_vscode_copilot(state, available_mcp_clients())
+    installed_clients = available_mcp_clients()
     if not installed_clients:
         raise RuntimeError(
             "No supported MCP clients are installed. Install Claude, Codex, Gemini, OpenCode, "
@@ -2008,7 +1980,7 @@ def setup_mcp_clients(
 
     if not quiet:
         print_section(section)
-        client_names = ", ".join(mcp_client_display(client, state) for client in clients)
+        client_names = ", ".join(str(MCP_CLIENTS[client]["display"]) for client in clients)
         print_note(f"{action_note}: {client_names}")
     for client in missing_clients:
         print_warning(
@@ -2666,9 +2638,6 @@ def _run_mcp_list(client: str) -> str | None:
 
 def query_live_mcp_status(client: str) -> dict[str, str]:
     """Live ``{server_name: state}`` for one installed agent (empty if its listing can't be read)."""
-    if client == "copilot" and not shutil.which(str(MCP_CLIENTS[client]["binary"])):
-        # VS Code only: no Copilot CLI to ask, so report what Copilot's user config holds.
-        return dict.fromkeys(copilot.user_mcp_server_names(), LIVE_ENABLED)
     output = _run_mcp_list(client)
     if output is None:
         return {}
@@ -2844,7 +2813,7 @@ def list_mcp_command(agents: set[str] | None = None) -> int:
             )
 
     state = load_state()
-    installed = _with_vscode_copilot(state, available_mcp_clients())
+    installed = available_mcp_clients()
     probe_clients = [client for client in installed if agents is None or client in agents]
     scope_note = "" if agents is None else f" for {', '.join(sorted(agents))}"
 
@@ -2898,9 +2867,7 @@ def list_mcp_command(agents: set[str] | None = None) -> int:
     live_note = "Status is from each agent's `mcp list`"
     # Only mention the enabled/disabled caveat for the agents actually in the reported set.
     config_state_clients = [
-        mcp_client_display(client, state)
-        for client in ("codex", "copilot")
-        if client in probe_clients
+        MCP_CLIENTS[client]["display"] for client in ("codex", "copilot") if client in probe_clients
     ]
     if config_state_clients:
         verb = "reports" if len(config_state_clients) == 1 else "report"
